@@ -1,25 +1,17 @@
 from multiprocessing import Process, Pipe
 
-from bot import Angel, Host
+from bot import Tianshi, Zhuren
 
 import yaml
 
-ANGEL_TOKEN = "1622983332:AAHgC-aV9cJ8TgyGRtf9gFA_481HwxriHZ4"
-HOST_TOKEN = "1564529243:AAGHN2j9ZoadbdbX_yzNbqfQmeFFETHyEq4"
+TIANSHI_TOKEN = "1622983332:AAHgC-aV9cJ8TgyGRtf9gFA_481HwxriHZ4"
+ZHUREN_TOKEN = "1564529243:AAGHN2j9ZoadbdbX_yzNbqfQmeFFETHyEq4"
 
-def load(filename):
-    with open(filename, 'r') as f:
-        return yaml.safe_load(f)
-
-with open('what.txt', 'w') as f:
-    f.write("STARTING")
-
-ANGELS = load("angels.yaml")
-HOSTS = load("hosts.yaml")
 
 if __name__ == "__main__":
-    angel_pipe, host_pipe = Pipe()
-    _angel = Process(target=Angel.run, args=( ANGEL_TOKEN, angel_pipe, HOSTS, ))
-    _host = Process(target=Host.run, args=(HOST_TOKEN, host_pipe, ANGELS, ))
-    _angel.start()
-    _host.start()
+    p1, p2 = Pipe()
+    p3, p4 = Pipe()
+    t = Process(target=Tianshi.run, args=(TIANSHI_TOKEN, p1, p3, ))
+    z = Process(target=Zhuren.run, args=(ZHUREN_TOKEN, p2, p4, ))
+    t.start()
+    z.start()

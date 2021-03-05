@@ -1,134 +1,241 @@
-import telegram.ext as tg
-
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from contextlib import contextmanager
+from ruamel.yaml import YAML
 from threading import Thread, Lock
 import random
-from ruamel.yaml import YAML
-import ruamel.yaml
-import json
-import os
 
 yaml = YAML()
 
-with open('members.yaml', 'r') as f:
-    MEMBERS = yaml.load(f)
+from handlers import *
 
-LOCK = Lock()
+class BotException(Exception):
+    def __init__(self, message):
+        self.message = message
+        super().__init__(message)
+
+class CommandUsageError(BotException):
+    def __init__(self, *, usage=None):
+        message = "错误使用command！{0}".format('' if usage is None else '\n' + usage)
+        super().__init__(message)
+
+
+@contextmanager
+def update_yaml(filename):
+    data = load_yaml(filename)
+    yield data
+    save_yaml(filename, data)
+
+def load_yaml(filename):
+    try:
+        with open(filename, 'rb') as f:
+            return yaml.load(f)
+    except:
+        return {}
+
+def save_yaml(filename, data):
+    with open(filename, 'wb') as f:
+        yaml.dump(data, f)
+
+# GAME CONSTANTS
+GAME = load_yaml('game.yaml')
+STATUS = GAME['status']
+ADMINS = GAME['admins']
+
+
+def is_admin(send=True):
+
+    def wrapper(func):
+        def wrapped(self, update, ctx):
+            if update.effective_user.id in ADMINS:
+                if send:
+                    self.send_admin_command(func)
+                return func(self, update, ctx)
+        return wrapped
+    return wrapper
+
 
 class Bot:
 
-    def __init__(self, token, pipe, targets):
-        self.updater = tg.Updater(token=token, use_context=True)
+    def __init__(self, token, r_pipe, a_pipe):
+        self.updater = Updater(token, use_context=True)
         self.dispatcher = self.updater.dispatcher
-        self.job_queue = self.updater.job_queue
+        self._queue = self.updater.job_queue
+        self.bot = self.updater.bot
+        self.status = None
 
-        self._scores = {}
+        self.lock = Lock()
 
-        self._pipe = pipe
-        self._loop = Thread(target=self._internal_loop, daemon=True)
+        self._send_to = load_yaml(self.name + '.yaml')
+        self._relay_pipe = r_pipe
+        self._admin_pipe = a_pipe
+        self._relay_thread = Thread(target=self.relay_message, daemon=True)
+        self._admin_thread = Thread(target=self.recv_admin_command, daemon=True)
 
-        self.targets = targets
+        # self.dispatcher.add_error_handler(self.error_handler)
 
-        self.dispatcher.add_handler(tg.MessageHandler(tg.Filters.all, self.on_message))
-        self.dispatcher.add_handler(tg.CommandHandler('start', self.start))
+        self.dispatcher.add_handler(CommandHandler('start', self.start_command))
+        self.dispatcher.add_handler(CommandHandler('signup', self.signup_command))
+        self.dispatcher.add_handler(CommandHandler('rate', self.rate_command))
+        self.dispatcher.add_handler(CommandHandler('broadcast', self.broadcast_command))
+        self.dispatcher.add_handler(CommandHandler('game_start', self.game_start_command))
+        self.dispatcher.add_handler(CommandHandler('shuffle', self.setup_users_command))
 
-        self.job_queue.run_repeating(self._record_score, 60)
+        self.dispatcher.add_handler(MessageHandler(Filters.all & (~Filters.command), self.recv_message))
 
-    def _record_score(self, ctx):
-        print("SAVING SCORES...")
-        with LOCK:
-            with open(self.__class__.__name__.lower() + "_score.json", 'r') as f:
-                scores = json.load(f)
-                for user_id, to_add in self._scores.items():
-                    scores[str(user_id)] += to_add
-            with open(self.__class__.__name__.lower() + "_score.json", 'w') as f:
-                json.dump(scores, f)
-                self._scores = {}
+    def start_command(self, update, ctx):
+        update.message.reply_text('请用 /signup <your_name> 进行注册!')
 
-    def on_message(self, update, ctx):
-
-        user = update.effective_user
-
-        if user.id in MEMBERS:
-
-            message = update.message
-            payload = {
-                'user_id': self.targets[user.id]
+    def signup_command(self, update, ctx):
+        try:
+            user_id, name = update.effective_user.id, ctx.args[0]
+        except IndexError:
+            raise CommandUsageError(usage='/signup <your_name>')
+        entry = {
+            'name': name,
+            'score': {
+                'tianshi': 0,
+                'zhuren': 0
+            },
+            'rating': {
+                'tianshi': 0,
+                'zhuren': 0
             }
+        }
+        with update_yaml('users.yaml') as users:
+            users[user_id] = entry
+        update.message.reply_text('注册成功！ 请等待游戏开始 ~')
 
-            if message.text:
-                payload['type'] = 'text'
-                payload['data'] = message.text
+    def rate_command(self, update, ctx):
+        if self.status == 2:
+            try:
+                rating = int(ctx.args[0])
+            except (IndexError, ValueError):
+                raise CommandUsageError(usage='/rating <your_rating> 分数 <= 25')
 
-            if message.sticker:
-                payload['type'] = 'sticker'
-                payload['data'] = message.sticker.file_id
+            if rating >= 25 or rating < 0:
+                raise CommandUsageError(usage='/rating <your_rating> 分数 <= 25')
+            user = update.effective_user.id
+            self.add_rating(self._send_to[user.id], rating)
 
-            if message.photo:
-                payload['type'] = 'photo'
-                path = str(random.randint(100000, 999999)) + "_temp.jpg"
-                message.photo[-1].get_file().download(path)
-                payload['data'] = path
-
-            if payload.get('type') is not None:
-                self._pipe.send(payload)
-                if user.id not in self._scores:
-                    self._scores[user.id] = 0
-                self._scores[user.id] += 1
-
-        else:
-
-            ctx.bot.send_message(user.id, "你不是玩家！")
-
-    def start(self, update, ctx):
-        user = update.effective_user
-        with LOCK:
-            with open('members.yaml', 'r+') as f:
-                members = yaml.load(f)
-                members[user.id] = "%s %s" % (user.first_name, user.last_name)
-                yaml.dump(members, f)
-
-    def _internal_loop(self):
-
+    def setup_users(self):
+        users = load_yaml('users.yaml')
         while True:
+            pairs = {}
+            a, b = list(users.copy().keys()), list(users.copy().keys())
+            random.shuffle(a)
+            random.shuffle(b)
+            for x, y in zip(a, b):
+                if x == y:
+                    pass
+                pairs[x] = y
+            break
+        save_yaml('tianshi.yaml', pairs)
+        save_yaml('zhuren.yaml', {
+            v: k for k, v in pairs.items()
+        })
 
-            payload = self._pipe.recv()
+    def game_start(self):
+        with update_yaml('game.yaml') as game:
+            self.status = game['status'] = 1
+        self._send_to = load_yaml(self.__class__.__name__.lower() + '.yaml')
+        self.broadcast('GAME START')
+        print(self._send_to)
 
-            def send_message(ctx):
+    def broadcast(self, text):
+        for user_id in self.players:
+            self.bot.send_message(user_id, text)
 
-                def _send_photo(chat_id, filename):
-                    with open(filename, 'rb') as f:
-                        ctx.bot.send_photo(chat_id, f)
-                    os.remove(filename)
+    @is_admin(send=False)
+    def setup_users_command(self, update, ctx):
+        self.setup_users()
 
-                funcs = {
-                    'text': ctx.bot.send_message,
-                    'photo': _send_photo,
-                    'sticker': ctx .bot.send_sticker
+    @is_admin()
+    def game_start_command(self, update, ctx):
+        self.game_start()
+
+    @is_admin(send=False)
+    def broadcast_command(self, update, ctx):
+        text = "[SYSTEM]" + " ".join(ctx.args)
+        self.broadcast(text)
+
+    def send_admin_command(self, func, arg):
+        self._admin_pipe.send(func.__name__[:-8], arg)
+
+    def recv_admin_command(self):
+        funcname = self._admin_pipe.recv()
+        func = getattr(self, funcname)
+        func()
+
+    def recv_message(self, update, ctx):
+        if self.status == 0:
+            raise BotException('游戏还没开始 ~')
+        if self.status == 2:
+            raise BotException('游戏结束了 ~')
+        user, message = update.effective_user, update.message
+        if user.id in self.players:
+            message_type, handler = get_recv_handler(message)
+            if handler is not None:
+                payload = {
+                    'user_id': self._send_to[user.id],
+                    'type': message_type,
+                    'arg': handler(message),
                 }
+                self._relay_pipe.send(payload)
+                self.add_score(user.id)
 
-                func = funcs.get(payload['type'])
-                func(payload['user_id'], payload['data'])
+    def relay_message(self):
+        while True:
+            payload = self._relay_pipe.recv()
+            handler = get_send_handler(payload)
+            self._queue.run_once(handler, 0.1)
 
-            self.job_queue.run_once(send_message, 0.2)
+    def add_score(self, user_id):
+        with self.lock:
+            with update_yaml('users.yaml') as users:
+                users[user_id]['score'][self.name] += 1
+
+    def add_rating(self, user_id, score):
+        with update_yaml('users.yaml') as users:
+            users[user_id]['rating'][self.name] = score
 
     @classmethod
-    def run(cls, token, pipe, targets):
-        self = cls(token, pipe, targets)
-        self._loop.start()
+    def run(cls, token, r_pipe, a_pipe):
+        self = cls(token, r_pipe, a_pipe)
+        self._admin_thread.start()
+        self._relay_thread.start()
         self.updater.start_polling()
-        print("WAITING FOR MESSAGES...")
 
-class Angel(Bot):
+        print(self.name, "RUNNING...")
+
+    @property
+    def name(self):
+        return self.__class__.__name__.lower()
+
+    @property
+    def players(self):
+        return list(self._send_to.keys())
+
+    def error_handler(self, update, ctx):
+        message = ctx.error.message if getattr(ctx.error, 'message', None) else ' '.join(ctx.error.args)
+        update.message.reply_text(message)
+
+class Tianshi(Bot):
     pass
 
-class Host(Angel):
+class Zhuren(Bot):
 
-    def who(self, update, ctx):
-        user = update.effective_user
-        try:
-            host_id = self.targets[user.id]
-            name = MEMBERS[host_id]
-        except KeyError:
-            ctx.bot.send_message(chat_id=user.id, text="你不是玩家！")
-        else:
-            ctx.bot.send_message(chat_id=user.id, text="你的主人是: %s" % name)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dispatcher.add_handler(CommandHandler('who', self.who_command))
+
+    def game_start(self):
+        super().game_start()
+        users = load_yaml('users.yaml')
+        for a_id, z_id in self._send_to.items():
+            self.bot.send_message(a_id, '你的主人是: %s' % users[z_id]['name'])
+
+    def who_command(self, update, ctx):
+        a_id = update.effective_user.id
+        users = load_yaml('users.yaml')
+        z_id = self._send_to[a_id]
+        self.bot.send_message(a_id, '你的主人是: %s' % users[z_id]['name'])
