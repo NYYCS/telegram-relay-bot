@@ -1,24 +1,38 @@
-from telegram.ext import Updater, MessageHandler, Filters
-from threading import Thread
-
-from game import CURRENT_GAME_STATE
-from model import Context, Message
-from util import *
-
 import inspect
-import os
+import random
 
-def command(*, name):
-    def wrapper(func):
-        func.__command__ = '/' + name
-        return func
+from collections import namedtuple
+from telegram.ext import Updater, MessageHandler, Filters
 
-    return wrapper
+from context import Context
+from commands import Command
+from exception import CommandUsageError
+
+
+import util
+
+
+
+class User:
+
+    def __init__(self, id, name):
+        self.id = id
+        self.name = name
+
+    def __hash__(self):
+        return self.id
+
+    def __eq__(self, other):
+        return self.id == other.id and isinstance(other, self.__class__)
+
+    def __str__(self):
+        return self.name
+
+
 
 class BotMeta(type):
 
     def __new__(mcs, *args, **kwargs):
-
         cls = super().__new__(mcs, *args, **kwargs)
 
         commands = {}
@@ -27,10 +41,11 @@ class BotMeta(type):
             for attr, value in base.__dict__.items():
                 if not attr.startswith("__"):
                     try:
-                        command = value.__command__
+                        command_attrs = value.__command_attrs__
                     except AttributeError:
                         continue
-                    commands[command] = value
+                    command = Command(value, **command_attrs)
+                    commands[command.name] = command
 
         cls.__commands__ = commands
 
@@ -41,121 +56,73 @@ class Bot(metaclass=BotMeta):
 
     def __new__(cls, *args, **kwargs):
         self = super().__new__(cls)
-        self._commands = cls.__commands__
+        self.commands = cls.__commands__
         return self
 
     def __init__(self, token, conn):
-        self.updater = Updater(token, use_context=True)
-        self._bot = self.updater.bot
-        self.updater.dispatcher.add_handler(MessageHandler(Filters.command, self.listen_for_commands))
-        self.updater.dispatcher.add_handler(MessageHandler(Filters.all & (~Filters.command), self.listen_for_message))
-        self.signal_listener = Thread(target=self.listen_for_signal, daemon=True)
+        self.updater = Updater(token)
+        self.updater.dispatcher.add_handler(
+            MessageHandler(Filters.command, self.command_listener)
+        )
+
         self.conn = conn
 
-        self.listeners = []
+        self._users = {}
 
-        if CURRENT_GAME_STATE == 'START':
-            self._recipients = load_yaml(self.botname)
+    def add_user(self, id, name):
+        pass
 
-    @property
-    def botname(self):
-        return self.__class__.__name__.lower()
+    def get_user(self, id):
+        return self._users[id] if id in self._users else User(id, 'Dummy')
 
-    @property
-    def members(self):
-        return list(self._recipients.keys())
+    def get_context(self, *, update=None, data=None, cls=Context):
+        if update:
+            user = self.get_user(update.effective_user)
+            return cls(self, user=user)
+        if data:
+            return cls(self, **data)
 
-    def signal_call(self, command_name, ctx, *args):
-        ctx.stackcount += 1
+    def send_command(self, ctx, command, *args):
+        ctx.reinvoked_commands.add(command)
         payload = {
-            'name': command_name,
-            'args': args
+            'op': 'COMMAND',
+            'd' : {
+                'command': command,
+                'context': ctx.to_dict(),
+                'arguments': args
+            }
         }
         self.conn.send(payload)
 
-    def listen_for_commands(self, update, ctx):
-        raw_text = update.message.text
-        command_name, *args = raw_text.split(" ")
-        try:
-            ctx = Context(self, update.effective_user.id)
-            self.invoke_command(command_name, ctx, *args)
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            update.message.reply_text("命令用法错误！")
-
-    def invoke_command(self, command_name, *args):
-
-        ctx, *args = args
-
-        if ctx.stackcount <= 1:
-
-            try:
-                command = self._commands[command_name]
-            except KeyError:
-                pass
-            else:
-
-                argnames, varargs, *_, annotations = inspect.getfullargspec(command)
-
-                if varargs:
-                    command(ctx, *args)
-                else:
-                    # Trim extra arguments
-                    args = args[:len(argnames)]
-
-                    cleaned_args = []
-
-                    for argname, arg in zip(argnames, args):
-                        if argname in annotations:
-                            cls = annotations[argname]
-                            arg = cls(arg)
-                        cleaned_args.append(arg)
-
-                    command(ctx, *cleaned_args)
-
-
-
-    def listen_for_message(self, update, ctx):
-        user, message = update.effective_user, update.message
-        if user.id in self.members:
-
-            if self.listeners:
-                for i, listener in enumerate(self.listeners):
-                    listener.send(message)
-
-            recipient = self._recipients[user.id]
-
-            self.signal_call('send_message', recipient, Message(message))
-
-    def listen_for_signal(self):
+    def _listener(self):
         while True:
+
             payload = self.conn.recv()
-            ctx, *args = payload['args']
-            func = getattr(self, payload['name'])
-            func(*args)
+            opcode, data = payload['op'], payload['d']
 
-    def send_message(self, user_id, message):
-        for attr in ('text', 'photo', 'sticker'):
-            if getattr(message, attr, None):
-                send = getattr(self, "send_" + attr)
-                return send(user_id, message=message)
+            if opcode == 'COMMAND':
+                command = data['command']
+                ctx = self.get_context(**data['ctx'])
+                args = data['args']
+                return self.invoke_command(command, ctx, *args)
 
-    def send_text(self, chat_id, *, text=None, message=None):
-        if text:
-            self._bot.send_message(chat_id, text)
-        else:
-            self._bot.send_message(chat_id, message.text)
 
-    def send_sticker(self, chat_id, *, file_id=None, message=None):
-        s = file_id or message.sticker
-        self._bot.send_sticker(chat_id, s)
+    def command_listener(self, update, ctx):
+        command_name, *args = update.message.text.split(" ")
+        ctx = self.get_context(update=update)
+        try:
+            self.invoke_command(command_name.lstrip('/'), ctx, *args)
+        except KeyError:
+            pass
 
-    def send_photo(self, chat_id, *, path=None, message=None):
-        if message:
-            with open(message.photo, 'rb') as f:
-                self._bot.send_photo(chat_id, f)
-            os.remove(message.photo)
-        else:
-            with open(path, 'rb') as f:
-                self._bot.send_photo(chat_id, f)
+    def invoke_command(self, command, ctx, *args):
+        if isinstance(command, str):
+            command = self.commands[command]
+        try:
+            command.invoke(self, ctx, *args)
+        except Exception as e:
+            if isinstance(e, CommandUsageError):
+                ctx.send(e)
+            else:
+                ctx.send('Bot有问题，err跟负责人讲一下')  # TODO Error
+

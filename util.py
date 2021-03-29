@@ -1,14 +1,26 @@
-from ruamel.yaml import YAML
+import ruamel.yaml
+import random
 
-yaml = YAML()
-
-
-def load_yaml(filename):
-    with open(filename + '.yaml', 'rb') as f:
-        data = yaml.load(f)
-    return data
+yaml = ruamel.yaml.YAML()
 
 
-def save_yaml(filename, data):
-    with open(filename + '.yaml', 'wb') as f:
-        yaml.dump(data, f)
+
+class cached_property:
+    def __init__(self, function):
+        self.function = function
+        self.__doc__ = getattr(function, '__doc__')
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+
+        value = self.function(instance)
+        setattr(instance, self.function.__name__, value)
+
+        return value
+
+
+def shuffled(l):
+    copy = l.copy()
+    random.shuffle(copy)
+    return copy
