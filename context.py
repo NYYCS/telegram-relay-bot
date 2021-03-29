@@ -1,6 +1,3 @@
-from bot import User
-
-
 class Context:
 
     def __init__(self, bot, **attrs):
