@@ -1,13 +1,10 @@
-
+import bot
 import commands
 import util
-import bot
-
 from game import Game, Phase
 
 
 def admin_command(*, name, reinvoke=False):
-
     def wrapper(func):
         command = commands.command(name=name, reinvoke=reinvoke)(func)
         command.__command_checks__ = [lambda ctx: ctx.user.id in Game.ADMINS]
@@ -15,10 +12,10 @@ def admin_command(*, name, reinvoke=False):
 
     return wrapper
 
-def in_phase(phase):
 
+def in_phase(*phases):
     def check(ctx):
-        return Game.PHASE is phase
+        return Game.PHASE in phases
 
     return check
 
@@ -49,8 +46,10 @@ class GameBot(bot.Bot):
 
     @admin_command(name='reload', reinvoke=True)
     def reload(self, ctx):
-        pass
-
+        ctx.reply("正在刷新玩家...")
+        self._load_users()
+        ctx.reply("刷新玩家成功！")
+        self.invoke_command('dashboard', ctx)
 
     @admin_command(name='shuffle')
     def shuffle(self, ctx):
@@ -61,12 +60,14 @@ class GameBot(bot.Bot):
                 for sender, recipient in shuffled.items():
                     if sender == recipient or shuffled[recipient] == sender:
                         raise StopIteration
+                    sender.recipient = recipient
+                    recipient.sender = sender
             except StopIteration:
                 continue
             else:
-                break
-
-
+                with open('users.yaml', 'wb') as file:
+                    util.yaml.dump(self.users, file)
+        ctx.reply("分配成功！ 记得用`/reload`")
 
     @admin_command(name='dashboard')
     def dashboard(self, ctx):
@@ -81,19 +82,21 @@ class GameBot(bot.Bot):
         if Game.PHASE is Phase.ENDING:
             self.invoke_command('broadcast', ctx, "天使与主任的活动要截止了哦 ~ 开始进入评分阶段, 大家请用`/rating`进行评分 ~ ")
 
-class Angel(GameBot):
+
+class Sender(GameBot):
 
     @commands.command(name='/who')
     @commands.check(in_phase(Phase.ENDING))
     def who(self, ctx):
         ctx.reply("你的天使是: %s" % ctx.user.sender)
 
-class Dumbs(GameBot):   # TODO Change name
+
+class Recipient(GameBot):  # TODO Change name
 
     @commands.command(name='/who')
-    @commands.check(in_phase(Phase.ENDING))
+    @commands.check(in_phase(Phase.IN_PROGRESS, Phase.ENDING))
     def who(self, ctx):
-        ctx.reply("你的天使是: %s" % ctx.user.sender)
+        ctx.reply("你的主人是: %s" % ctx.user.sender)
 
     @admin_command(name='gamephase', reinvoke=True)
     def gamephase(self, ctx, phase: str):
@@ -104,8 +107,3 @@ class Dumbs(GameBot):   # TODO Change name
                 self.send_text(user.id, "你的主人是: %s" % ctx.user.recipient)
         if Game.PHASE is Phase.ENDING:
             self.invoke_command('broadcast', ctx, "天使与主任的活动要截止了哦 ~ 开始进入评分阶段, 大家请用`/rating`进行评分 ~ ")
-
-
-
-
-
