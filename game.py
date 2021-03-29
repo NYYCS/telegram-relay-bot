@@ -2,10 +2,11 @@ import enum
 
 import util
 
+
 class Phase(enum.Enum):
-    PREPARING    =   "PREPARING"
-    IN_PROGRESS  =   "IN_PROGRESS"
-    ENDING       =   "ENDING"
+    PREPARING = "PREPARING"
+    IN_PROGRESS = "IN_PROGRESS"
+    ENDING = "ENDING"
 
 
 class _Game:
@@ -14,8 +15,7 @@ class _Game:
         with open('game.yaml', 'rb') as file:
             game = util.yaml.load(file)
         self.ADMINS = game['admins']
-        self.PHASE  = Phase(game['phase'])
-
+        self.PHASE = Phase(game['phase'])
 
     def set_phase(self, phase):
         self.PHASE = Phase(phase)
@@ -28,4 +28,3 @@ class _Game:
 
 
 Game = _Game()
-

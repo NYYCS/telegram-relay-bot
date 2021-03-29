@@ -1,8 +1,8 @@
-import ruamel.yaml
 import random
 
-yaml = ruamel.yaml.YAML()
+import ruamel.yaml
 
+yaml = ruamel.yaml.YAML()
 
 
 class cached_property:

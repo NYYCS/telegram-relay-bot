@@ -1,4 +1,5 @@
 import inspect
+
 from exception import BotException
 
 
