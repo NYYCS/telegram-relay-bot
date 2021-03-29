@@ -1,23 +1,18 @@
-import inspect
-import random
-
-from collections import namedtuple
 from telegram.ext import Updater, MessageHandler, Filters
 
-from context import Context
-from commands import Command
-from exception import CommandUsageError
-
-
 import util
-
+from commands import Command
+from context import Context
+from exception import CommandUsageError
 
 
 class User:
 
-    def __init__(self, id, name):
+    def __init__(self, id, **attrs):
         self.id = id
-        self.name = name
+        self.name = attrs.pop('name', 'UNSIGNED')
+        self._recipient = attrs.pop('recipient', None)
+        self._sender = attrs.pop('sender', None)
 
     def __hash__(self):
         return self.id
@@ -28,6 +23,8 @@ class User:
     def __str__(self):
         return self.name
 
+    def to_data(self):
+        return dict((() for attr in ('id', 'name', 'recipient', 'sender')))
 
 
 class BotMeta(type):
@@ -64,16 +61,39 @@ class Bot(metaclass=BotMeta):
         self.updater.dispatcher.add_handler(
             MessageHandler(Filters.command, self.command_listener)
         )
+        self.updater.dispatcher.add_handler(
+            MessageHandler(Filters.all & (~Filters.command), self.message_listener)
+        )
 
         self.conn = conn
 
-        self._users = {}
+        self._load_users()
+
+    @property
+    def users(self):
+        return list(self._users.values())
 
     def add_user(self, id, name):
-        pass
+        self._users[id] = User(id=id, name=name)
+        users = {id: user.name for id, user in self._users.items()}
+        with open('users.yaml', 'wb') as file:
+            util.yaml.dump(users, file)
+
+    def _load_users(self):
+        # TODO This is really really bad
+        with open('users.yaml', 'rb') as file:
+            data = util.yaml.load(file)
+        users = {id: User(**attrs) for id, attrs in data.items()}
+        self._users = users
+
+        for user in self.users:
+            if user._recipient is None:
+                break
+            user.recipient = self._users[user._recipient]
+            user.sender = self._users[user._sender]
 
     def get_user(self, id):
-        return self._users[id] if id in self._users else User(id, 'Dummy')
+        return self._users[id] if id in self._users else User(id)
 
     def get_context(self, *, update=None, data=None, cls=Context):
         if update:
@@ -86,7 +106,7 @@ class Bot(metaclass=BotMeta):
         ctx.reinvoked_commands.add(command)
         payload = {
             'op': 'COMMAND',
-            'd' : {
+            'd': {
                 'command': command,
                 'context': ctx.to_dict(),
                 'arguments': args
@@ -94,18 +114,12 @@ class Bot(metaclass=BotMeta):
         }
         self.conn.send(payload)
 
-    def _listener(self):
-        while True:
+    def process_message(self, message):
+        if message.text:
+            pass
 
-            payload = self.conn.recv()
-            opcode, data = payload['op'], payload['d']
-
-            if opcode == 'COMMAND':
-                command = data['command']
-                ctx = self.get_context(**data['ctx'])
-                args = data['args']
-                return self.invoke_command(command, ctx, *args)
-
+    def message_listener(self, update, ctx):
+        message = update.message
 
     def command_listener(self, update, ctx):
         command_name, *args = update.message.text.split(" ")
@@ -125,4 +139,3 @@ class Bot(metaclass=BotMeta):
                 ctx.send(e)
             else:
                 ctx.send('Bot有问题，err跟负责人讲一下')  # TODO Error
-
