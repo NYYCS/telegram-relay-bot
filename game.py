@@ -4,9 +4,9 @@ import util
 
 
 class Phase(enum.Enum):
-    PREPARING = "PREPARING"
-    IN_PROGRESS = "IN_PROGRESS"
-    ENDING = "ENDING"
+    PREPARING     =   "PREPARING"
+    IN_PROGRESS   =   "IN_PROGRESS"
+    ENDING        =   "ENDING"
 
 
 class _Game:
