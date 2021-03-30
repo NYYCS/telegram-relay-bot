@@ -1,10 +1,11 @@
+from game import Game, Phase
+
 import bot
 import commands
 import util
-from game import Game, Phase
-
 
 def admin_command(*, name, reinvoke=False):
+
     def wrapper(func):
         command = commands.command(name=name, reinvoke=reinvoke)(func)
         command.__command_checks__ = [lambda ctx: ctx.user.id in Game.ADMINS]
@@ -14,6 +15,7 @@ def admin_command(*, name, reinvoke=False):
 
 
 def in_phase(*phases):
+
     def check(ctx):
         return Game.PHASE in phases
 
@@ -65,8 +67,7 @@ class GameBot(bot.Bot):
             except StopIteration:
                 continue
             else:
-                with open('users.yaml', 'wb') as file:
-                    util.yaml.dump(self.users, file)
+                self._save_users()
         ctx.reply("分配成功！ 记得用`/reload`")
 
     @admin_command(name='dashboard')
@@ -91,7 +92,7 @@ class Sender(GameBot):
         ctx.reply("你的天使是: %s" % ctx.user.sender)
 
 
-class Recipient(GameBot):  # TODO Change name
+class Recipient(GameBot):
 
     @commands.command(name='/who')
     @commands.check(in_phase(Phase.IN_PROGRESS, Phase.ENDING))
@@ -104,6 +105,6 @@ class Recipient(GameBot):  # TODO Change name
         if Game.PHASE is Phase.IN_PROGRESS:
             self.invoke_command('broadcast', ctx, "天使与主人正式开始！ 大家跟主人/天使打个招呼 ~")
             for user in self.users:
-                self.send_text(user.id, "你的主人是: %s" % ctx.user.recipient)
+                self.send_text(user.id, "你的主人是: %s" % user.recipient)
         if Game.PHASE is Phase.ENDING:
             self.invoke_command('broadcast', ctx, "天使与主任的活动要截止了哦 ~ 开始进入评分阶段, 大家请用`/rating`进行评分 ~ ")
