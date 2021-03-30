@@ -72,7 +72,7 @@ class GameBot(bot.Bot):
 
     @admin_command(name='dashboard')
     def dashboard(self, ctx):
-        message = "Current users: %s\n" % len(self.users) + "\n".join(self.users)
+        message = "Current users: %s\n" % len(self.users) + "\n".join([str(user) for user in self.users])
         ctx.reply(message)
 
     @admin_command(name='gamephase', reinvoke=True)
@@ -103,7 +103,6 @@ class Recipient(GameBot):
     def gamephase(self, ctx, phase: str):
         Game.set_phase(phase)
         if Game.PHASE is Phase.IN_PROGRESS:
-            self.invoke_command('broadcast', ctx, "天使与主人正式开始！ 大家跟主人/天使打个招呼 ~")
             for user in self.users:
                 self.send_text(user.id, "你的主人是: %s" % user.recipient)
         if Game.PHASE is Phase.ENDING:

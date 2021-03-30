@@ -21,8 +21,6 @@ class Message:
 
     def send(self, user, *, bot):
         actual_bot = bot.updater.bot
-        if not isinstance(user, str):
-            user = user.id
         if self.text:
             actual_bot.send_message(user, self.text)
         if self.photo:
@@ -31,3 +29,6 @@ class Message:
             os.remove(self.photo)
         if self.sticker:
             actual_bot.send_sticker(user, self.sticker)
+
+    def to_data(self):
+        return dict(text=self.text, photo=self.photo, sticker=self.sticker)

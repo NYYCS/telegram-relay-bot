@@ -1,6 +1,9 @@
 from telegram.ext import Updater, MessageHandler, Filters
+from telegram import ParseMode
 
 from threading import Thread
+
+import logging
 
 from commands import Command, CommandError
 from message import Message
@@ -10,6 +13,7 @@ from user import User
 
 import util
 
+logging.basicConfig(filename='app.log', filemode='a', format='%(name)s:%(module)s - %(levelname)s - %(message)s', level=20)
 
 class BotMeta(type):
 
@@ -39,6 +43,7 @@ class Bot(metaclass=BotMeta):
     def __new__(cls, *args, **kwargs):
         self = super().__new__(cls)
         self.commands = cls.__commands__
+        self.log = logging.getLogger(cls.__name__.upper())
         return self
 
     def __init__(self, token, conn):
@@ -64,18 +69,22 @@ class Bot(metaclass=BotMeta):
 
     def _load_users(self):
         # TODO This is really really bad
+        self.log.info("Loading users...")
         with open('users.yaml', 'rb') as file:
             data = util.yaml.load(file)
-        users = {id: User(self, id, **attrs) for id, attrs in data.items()}
+        users = {id: User(self, **attrs) for id, attrs in data.items()}
         self._users = users
+        self.log.info("Users loaded.")
 
     def _save_users(self):
+        self.log.info("Saving users...")
         users = {id: user.to_data() for id, user in self._users.items()}
         with open('users.yaml', 'wb') as file:
             util.yaml.dump(users, file)
+        self.log.info("Users saved.")
 
     def send_text(self, user, text):
-        if not isinstance(user, str):
+        if not isinstance(user, int):
             user = user.id
         self.updater.bot.send_message(user, text)
 
@@ -84,18 +93,18 @@ class Bot(metaclass=BotMeta):
 
     def get_context(self, *, update=None, data=None, cls=Context):
         if update:
-            user = self.get_user(update.effective_user)
+            user = self.get_user(update.effective_user.id)
             return cls(self, user=user)
         if data:
             return cls(self, **data)
 
-    def send_command(self, ctx, command, *args):
+    def send_command(self, command, ctx, *args):
         ctx.reinvoked_commands.add(command)
-        payload = {'op': 'COMMAND', 'd': {'command': command, 'context': ctx, 'arguments': args}}
+        payload = {'op': 'COMMAND', 'd': {'command': command, 'context': ctx.to_data(), 'arguments': args}}
         self.conn.send(payload)
 
     def send_message_command(self, user, message):
-        payload = {'op': 'MESSAGE', 'd': {'user': user, 'message': Message(message)}}
+        payload = {'op': 'MESSAGE', 'd': {'user': user.id, 'message': Message(message).to_data()}}
         self.conn.send(payload)
 
     def message_listener(self, update, ctx):
@@ -109,12 +118,16 @@ class Bot(metaclass=BotMeta):
             payload = self.conn.recv()
             opcode, data = payload['op'], payload['d']
             if opcode == 'COMMAND':
-                command, ctx, args = data['command'], data['context'], data['arguments']
+                self.log.info("Received COMMAND payload.")
+                command, ctx, args = self.commands.get(data['command']), self.get_context(data=data['context']), data['arguments']
                 command.invoke(self, ctx, *args)
             if opcode == 'MESSAGE':
-                user, message = data['user'], data['message']
-                recipient = getattr(user, self.__class__.__name__.lower())
-                message.send(recipient, bot=self)
+                self.log.info("Received MESSAGE payload.")
+                user, message = self.get_user(data['user']), Message(**data['message'])
+                if self.__class__.__name__ == "Sender":
+                    message.send(user.sender.id, bot=self)
+                if self.__class__.__name__ == "Recipient":
+                    message.send(user.recipient.id, bot=self)
 
     def command_listener(self, update, ctx):
         command_name, *args = update.message.text.split(" ")
@@ -128,19 +141,22 @@ class Bot(metaclass=BotMeta):
         if isinstance(command, str):
             command = self.commands[command]
         try:
+            self.log.info("Invoking %s" % command)
             command.invoke(self, ctx, *args)
         except Exception as error:
             if isinstance(error,  CommandError):
                 if not error.quiet:
-                    ctx.send(error.message)
+                    ctx.reply(error.message)
             else:
                 import traceback
+                self.log.critical("Exception occurred when invoking %s" % command, exc_info=True)
                 self.send_text(Game.ADMINS[0], traceback.format_exc())
-                ctx.send('Bot有问题，err跟负责人讲一下')
+                ctx.reply('Bot有问题，err跟负责人讲一下')
 
     @classmethod
     def run(cls, token, conn):
         self = cls(token, conn)
+        self.log.info("Running...")
         self._process_payload_thread = Thread(target=self.process_payload, daemon=True)
         self._process_payload_thread.start()
         self.updater.start_polling()

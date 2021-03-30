@@ -11,17 +11,17 @@ class User:
     def recipient(self):
         return self.__bot.get_user(self._recipient)
 
-    @property
-    def sender(self):
-        return self.__bot.get_user(self._sender)
-
     @recipient.setter
     def recipient(self, user):
         self._recipient = user.id
 
+    @property
+    def sender(self):
+        return self.__bot.get_user(self._sender)
+
     @sender.setter
     def sender(self, user):
-        self.sender = user.id
+        self._sender = user.id
 
     def __hash__(self):
         return self.id
@@ -33,4 +33,4 @@ class User:
         return self.name
 
     def to_data(self):
-        return dict(((attr, self.__dict__[attr]) for attr in ('id', 'name', '_recipient', '_sender')))
+        return dict(((attr.lstrip("_"), self.__dict__[attr]) for attr in ('id', 'name', '_recipient', '_sender')))

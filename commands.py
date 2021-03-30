@@ -5,7 +5,7 @@ from exception import BotException
 
 class CommandError(BotException):
 
-    def __init__(self, message, *, quiet=True):
+    def __init__(self, message, *, quiet=False):
         super().__init__(message)
         self.message = message
         self.quiet = quiet
@@ -32,7 +32,7 @@ def command(*, name, reinvoke=False):
     def wrapper(func):
         func.__command_attrs__ = {
             'name': name,
-            'checks': command.__command_checks__ if hasattr(func, '__command_checks__') else None,
+            'checks': getattr(func, '__commands_checks__', None),
             'reinvoke': reinvoke
         }
         return func
@@ -71,9 +71,9 @@ class Command:
         self._varargs = varargs
 
         if self._varargs:
-            self.usage = "`%s [arguments]`" % self.prefixed_name
+            self.usage = "%s [arguments]" % self.prefixed_name
         else:
-            self.usage = "`%s %s" % (self.prefixed_name, " ".join(argnames))
+            self.usage = "%s %s" % (self.prefixed_name, " ".join(argnames))
             # TODO make this not as scuffed?
             self.converters = [
                 annotations[argname] if argname in annotations
@@ -86,6 +86,7 @@ class Command:
         return '%s command' % self.prefixed_name
 
     def invoke(self, bot, ctx, *args):
+
         for check in self.checks:
             if not check(ctx):
                 raise CheckFailure(check)
@@ -94,16 +95,14 @@ class Command:
             self.callback(bot, ctx, *args)
         else:
             cleaned = []
+            try:
+                for arg, converter in zip(args[:len(self.converters)], self.converters):
+                    if converter is not None:
+                            arg = converter(arg)
+                    cleaned.append(arg)
+                self.callback(bot, ctx, *cleaned)
+            except:
+                raise CommandUsageError(self)
 
-            for arg, converter in zip(args[:len(self.converters)], self.converters):
-                if converter is not None:
-                    try:
-                        arg = converter(arg)
-                    except:
-                        raise CommandUsageError(self)
-                cleaned.append(arg)
-
-            self.callback(bot, ctx, *cleaned)
-
-        if self.reinvoke and self.name in ctx.reinvoked_commands:
+        if self.reinvoke and self.name not in ctx.reinvoked_commands:
             bot.send_command(self.name, ctx, *args)
