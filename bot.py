@@ -1,35 +1,20 @@
 from telegram.ext import Updater, MessageHandler, Filters
 
-import util
-from commands import Command
+from threading import Thread
+
+from commands import Command, CommandError
+from message import Message
 from context import Context
-from exception import CommandUsageError
+from game import Game, Phase
+from user import User
 
-
-class User:
-
-    def __init__(self, id, **attrs):
-        self.id = id
-        self.name = attrs.pop('name', 'UNSIGNED')
-        self._recipient = attrs.pop('recipient', None)
-        self._sender = attrs.pop('sender', None)
-
-    def __hash__(self):
-        return self.id
-
-    def __eq__(self, other):
-        return self.id == other.id and isinstance(other, self.__class__)
-
-    def __str__(self):
-        return self.name
-
-    def to_data(self):
-        return dict((() for attr in ('id', 'name', 'recipient', 'sender')))
+import util
 
 
 class BotMeta(type):
 
     def __new__(mcs, *args, **kwargs):
+
         cls = super().__new__(mcs, *args, **kwargs)
 
         commands = {}
@@ -74,26 +59,28 @@ class Bot(metaclass=BotMeta):
         return list(self._users.values())
 
     def add_user(self, id, name):
-        self._users[id] = User(id=id, name=name)
-        users = {id: user.name for id, user in self._users.items()}
-        with open('users.yaml', 'wb') as file:
-            util.yaml.dump(users, file)
+        self._users[id] = User(self, id, name=name)
+        self._save_users()
 
     def _load_users(self):
         # TODO This is really really bad
         with open('users.yaml', 'rb') as file:
             data = util.yaml.load(file)
-        users = {id: User(**attrs) for id, attrs in data.items()}
+        users = {id: User(self, id, **attrs) for id, attrs in data.items()}
         self._users = users
 
-        for user in self.users:
-            if user._recipient is None:
-                break
-            user.recipient = self._users[user._recipient]
-            user.sender = self._users[user._sender]
+    def _save_users(self):
+        users = {id: user.to_data() for id, user in self._users.items()}
+        with open('users.yaml', 'wb') as file:
+            util.yaml.dump(users, file)
+
+    def send_text(self, user, text):
+        if not isinstance(user, str):
+            user = user.id
+        self.updater.bot.send_message(user, text)
 
     def get_user(self, id):
-        return self._users[id] if id in self._users else User(id)
+        return self._users[id] if id in self._users else User(self, id)
 
     def get_context(self, *, update=None, data=None, cls=Context):
         if update:
@@ -104,22 +91,30 @@ class Bot(metaclass=BotMeta):
 
     def send_command(self, ctx, command, *args):
         ctx.reinvoked_commands.add(command)
-        payload = {
-            'op': 'COMMAND',
-            'd': {
-                'command': command,
-                'context': ctx.to_dict(),
-                'arguments': args
-            }
-        }
+        payload = {'op': 'COMMAND', 'd': {'command': command, 'context': ctx, 'arguments': args}}
         self.conn.send(payload)
 
-    def process_message(self, message):
-        if message.text:
-            pass
+    def send_message_command(self, user, message):
+        payload = {'op': 'MESSAGE', 'd': {'user': user, 'message': Message(message)}}
+        self.conn.send(payload)
 
     def message_listener(self, update, ctx):
-        message = update.message
+        user = self.get_user(update.effective_user.id)
+        if user in self.users and Game.PHASE is not Phase.PREPARING:
+            message = update.message
+            self.send_message_command(user, message)
+
+    def process_payload(self):
+        while True:
+            payload = self.conn.recv()
+            opcode, data = payload['op'], payload['d']
+            if opcode == 'COMMAND':
+                command, ctx, args = data['command'], data['context'], data['arguments']
+                command.invoke(self, ctx, *args)
+            if opcode == 'MESSAGE':
+                user, message = data['user'], data['message']
+                recipient = getattr(user, self.__class__.__name__.lower())
+                message.send(recipient, bot=self)
 
     def command_listener(self, update, ctx):
         command_name, *args = update.message.text.split(" ")
@@ -134,8 +129,19 @@ class Bot(metaclass=BotMeta):
             command = self.commands[command]
         try:
             command.invoke(self, ctx, *args)
-        except Exception as e:
-            if isinstance(e, CommandUsageError):
-                ctx.send(e)
+        except Exception as error:
+            if isinstance(error,  CommandError):
+                if not error.quiet:
+                    ctx.send(error.message)
             else:
-                ctx.send('Bot有问题，err跟负责人讲一下')  # TODO Error
+                import traceback
+                self.send_text(Game.ADMINS[0], traceback.format_exc())
+                ctx.send('Bot有问题，err跟负责人讲一下')
+
+    @classmethod
+    def run(cls, token, conn):
+        self = cls(token, conn)
+        self._process_payload_thread = Thread(target=self.process_payload, daemon=True)
+        self._process_payload_thread.start()
+        self.updater.start_polling()
+
