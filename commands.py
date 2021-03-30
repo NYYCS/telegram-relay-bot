@@ -4,14 +4,31 @@ from exception import BotException
 
 
 class CommandError(BotException):
-    pass
+
+    def __init__(self, message, *, quiet=True):
+        super().__init__(message)
+        self.message = message
+        self.quiet = quiet
+
+class CommandUsageError(CommandError):
+
+    def __init__(self, command):
+        super().__init__(
+            "命令用法错误！\n"
+            "正确用法： `%s %s`" % (command.prefixed_name, command.usage)
+        )
 
 
 class CheckFailure(CommandError):
-    pass
+
+    def __init__(self, check):
+        message = getattr(check, 'message', None)
+        super().__init__(message, quiet=message is not None)
+
 
 
 def command(*, name, reinvoke=False):
+
     def wrapper(func):
         func.__command_attrs__ = {
             'name': name,
@@ -24,6 +41,7 @@ def command(*, name, reinvoke=False):
 
 
 def check(predicate, *, message=None):
+
     if message:
         predicate.message = message
 
@@ -82,7 +100,7 @@ class Command:
                     try:
                         arg = converter(arg)
                     except:
-                        raise CommandError
+                        raise CommandUsageError(self)
                 cleaned.append(arg)
 
             self.callback(bot, ctx, *cleaned)
