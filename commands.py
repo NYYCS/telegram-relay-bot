@@ -15,7 +15,7 @@ class CommandUsageError(CommandError):
     def __init__(self, command):
         super().__init__(
             "命令用法错误！\n"
-            "正确用法： `%s %s`" % (command.prefixed_name, command.usage)
+            "正确用法： %s" % command.usage
         )
 
 
@@ -27,11 +27,12 @@ class CheckFailure(CommandError):
 
 
 
-def command(*, name, reinvoke=False):
+def command(*, name, usage=None, reinvoke=False):
 
     def wrapper(func):
         func.__command_attrs__ = {
             'name': name,
+            'usage': usage,
             'checks': getattr(func, '__commands_checks__', None),
             'reinvoke': reinvoke
         }
@@ -60,21 +61,19 @@ def check(predicate, *, message=None):
 
 class Command:
 
-    def __init__(self, callback, name, *, checks=None, reinvoke=False):
+    def __init__(self, callback, name, *, usage=None, checks=None, reinvoke=False):
         self.callback = callback
         self.name = name
         self.prefixed_name = "/" + self.name
         self.reinvoke = reinvoke
+        self.usage = self.prefixed_name + " %s" % usage if usage else ''
 
         argnames, varargs, *_, annotations = inspect.getfullargspec(self.callback)
 
         self._varargs = varargs
 
-        if self._varargs:
-            self.usage = "%s [arguments]" % self.prefixed_name
-        else:
-            self.usage = "%s %s" % (self.prefixed_name, " ".join(argnames))
-            # TODO make this not as scuffed?
+        if not self._varargs:
+
             self.converters = [
                 annotations[argname] if argname in annotations
                 else None for argname in annotations

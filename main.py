@@ -1,8 +1,8 @@
 import multiprocessing
 import gamebot
 
-SENDER_TOKEN      =   "1622983332:AAHgC-aV9cJ8TgyGRtf9gFA_481HwxriHZ4"
-RECIPIENT_TOKEN   =   "1564529243:AAGHN2j9ZoadbdbX_yzNbqfQmeFFETHyEq4"
+SENDER_TOKEN      =   ""
+RECIPIENT_TOKEN   =   ""
 
 if __name__ == "__main__":
     sconn, rconn = multiprocessing.Pipe()

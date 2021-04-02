@@ -1,9 +1,10 @@
 from telegram.ext import Updater, MessageHandler, Filters
-from telegram import ParseMode
 
 from threading import Thread
 
 import logging
+import random
+import os
 
 from commands import Command, CommandError
 from message import Message
@@ -46,6 +47,21 @@ class Bot(metaclass=BotMeta):
         self.log = logging.getLogger(cls.__name__.upper())
         return self
 
+    def try_dump(self, filename, data):
+        tempfile = "%s.yaml" % random.randint(100000, 999999)
+        try:
+            with open(tempfile, 'wb') as file:
+                util.yaml.dump(data, file)
+        except Exception:
+            import traceback
+            self.log.critical("Exception occured when loading '%s'!" % filename, exc_info=True)
+            self.send_text(Game.ADMINS[0], traceback.format_exc())
+        else:
+            with open(filename, 'wb') as file:
+                util.yaml.dump(data, file)
+        finally:
+            os.remove(tempfile)
+
     def __init__(self, token, conn):
         self.updater = Updater(token)
         self.updater.dispatcher.add_handler(
@@ -56,7 +72,6 @@ class Bot(metaclass=BotMeta):
         )
 
         self.conn = conn
-
         self._load_users()
 
     @property
@@ -79,14 +94,16 @@ class Bot(metaclass=BotMeta):
     def _save_users(self):
         self.log.info("Saving users...")
         users = {id: user.to_data() for id, user in self._users.items()}
-        with open('users.yaml', 'wb') as file:
-            util.yaml.dump(users, file)
+        self.try_dump('users.yaml', users)
         self.log.info("Users saved.")
 
     def send_text(self, user, text):
         if not isinstance(user, int):
             user = user.id
         self.updater.bot.send_message(user, text)
+
+    def send_photo(self, user, filename):
+        self.updater.bot.send_photo(user.id, open(filename,'rb'))
 
     def get_user(self, id):
         return self._users[id] if id in self._users else User(self, id)
@@ -128,6 +145,9 @@ class Bot(metaclass=BotMeta):
                     message.send(user.sender.id, bot=self)
                 if self.__class__.__name__ == "Recipient":
                     message.send(user.recipient.id, bot=self)
+            if opcode == 'SYNC':
+                self.log.info("Syncing users.")
+                self._load_users()
 
     def command_listener(self, update, ctx):
         command_name, *args = update.message.text.split(" ")
@@ -145,8 +165,7 @@ class Bot(metaclass=BotMeta):
             command.invoke(self, ctx, *args)
         except Exception as error:
             if isinstance(error,  CommandError):
-                if not error.quiet:
-                    ctx.reply(error.message)
+                ctx.reply(error.__traceback__)
             else:
                 import traceback
                 self.log.critical("Exception occurred when invoking %s" % command, exc_info=True)

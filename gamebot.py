@@ -24,21 +24,18 @@ def in_phase(*phases):
 
 class GameBot(bot.Bot):
 
-    @commands.command(name='signup')
+    @commands.command(name='signup', usage='名字')
     @commands.check(in_phase(Phase.PREPARING))
     def signup(self, ctx, name: str):
+        """/signup 名字：专业"""
         self.add_user(ctx.user.id, name)
         ctx.reply('注册成功！ 请耐心等待游戏开始 ~ ')
+        self.conn.send({'op': 'SYNC', 'd': None})
 
     @commands.command(name='start')
     @commands.check(in_phase(Phase.PREPARING))
     def start(self, ctx):
-        ctx.reply('Halo ~ 请用`/signup 名字`进行注册！')
-
-    @commands.command(name='rating')
-    @commands.check(in_phase(Phase.ENDING))
-    def rating(self, ctx, num):
-        pass
+        ctx.reply('Halo ~ 请用 /signup 名字 进行注册！')
 
     @admin_command(name='broadcast', reinvoke=True)
     def broadcast(self, ctx, *args):
@@ -60,19 +57,34 @@ class GameBot(bot.Bot):
             shuffled = dict(zip(self.users, util.shuffled(self.users)))
             try:
                 for sender, recipient in shuffled.items():
-                    if sender == recipient or shuffled[recipient] == sender:
+                    print(sender, recipient)
+                    if sender == recipient:
                         raise StopIteration
                     sender.recipient = recipient
                     recipient.sender = sender
             except StopIteration:
                 continue
             else:
-                self._save_users()
-        ctx.reply("分配成功！ 记得用`/reload`")
+                break
+        self._save_users()
+        ctx.reply("分配成功！ 记得用/reload")
+
+    @commands.command(name="cat")
+    @commands.check(in_phase(Phase.IN_PROGRESS))
+    def cat(self, ctx):
+        if self.__class__.__name__ == "Sender":
+            self.send_photo(ctx.user.sender, 'cat.jpg')
+        if self.__class__.__name__ == "Recipient":
+            self.send_photo(ctx.user.recipient, 'cat.jpg')
+        ctx.reply("He got cat ed!")
 
     @admin_command(name='dashboard')
     def dashboard(self, ctx):
-        message = "Current users: %s\n" % len(self.users) + "\n".join([str(user) for user in self.users])
+        message = "GAMEPHASE: %s\nCurrent users: %s\n%s" % (
+                Game.PHASE.value,
+                len(self.users),
+                "\n".join(["%s <-> %s" % (user, user.recipient) for user in self.users])
+        )
         ctx.reply(message)
 
     @admin_command(name='gamephase', reinvoke=True)
@@ -81,7 +93,7 @@ class GameBot(bot.Bot):
         if Game.PHASE is Phase.IN_PROGRESS:
             self.invoke_command('broadcast', ctx, "天使与主人正式开始！ 大家跟主人/天使打个招呼 ~")
         if Game.PHASE is Phase.ENDING:
-            self.invoke_command('broadcast', ctx, "天使与主任的活动要截止了哦 ~ 开始进入评分阶段, 大家请用`/rating`进行评分 ~ ")
+            self.invoke_command('broadcast', ctx, "天使与主任的活动要截止了哦 ~ 开始进入评分阶段, 大家请用 /rating 进行评分 ~ ")
 
 
 class Sender(GameBot):
@@ -106,4 +118,4 @@ class Recipient(GameBot):
             for user in self.users:
                 self.send_text(user.id, "你的主人是: %s" % user.recipient)
         if Game.PHASE is Phase.ENDING:
-            self.invoke_command('broadcast', ctx, "天使与主任的活动要截止了哦 ~ 开始进入评分阶段, 大家请用`/rating`进行评分 ~ ")
+            self.invoke_command('broadcast', ctx, "天使与主任的活动要截止了哦 ~ 开始进入评分阶段, 大家请用 /rating 进行评分 ~ ")
