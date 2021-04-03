@@ -58,7 +58,7 @@ class GameBot(bot.Bot):
             try:
                 for sender, recipient in shuffled.items():
                     print(sender, recipient)
-                    if sender == recipient:
+                    if sender == recipient and shuffled[recipient] == sender:
                         raise StopIteration
                     sender.recipient = recipient
                     recipient.sender = sender

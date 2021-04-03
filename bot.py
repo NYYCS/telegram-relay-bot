@@ -164,13 +164,14 @@ class Bot(metaclass=BotMeta):
             self.log.info("Invoking %s" % command)
             command.invoke(self, ctx, *args)
         except Exception as error:
+            import traceback
             if isinstance(error,  CommandError):
-                ctx.reply(error.__traceback__)
+                ctx.reply(error.message)
             else:
                 import traceback
                 self.log.critical("Exception occurred when invoking %s" % command, exc_info=True)
-                self.send_text(Game.ADMINS[0], traceback.format_exc())
                 ctx.reply('Bot有问题，err跟负责人讲一下')
+            self.send_text(Game.ADMINS[0], traceback.format_exc())
 
     @classmethod
     def run(cls, token, conn):
